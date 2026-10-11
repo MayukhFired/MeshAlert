@@ -22,7 +22,7 @@ class MeshForegroundService : Service() {
         super.onCreate()
         createNotificationChannel()
         startForeground(NOTIF_ID, buildNotification())
-        meshEngine = MeshEngine(this)
+        meshEngine = MeshEngine.getInstance(this)
         meshEngine.start()
     }
 

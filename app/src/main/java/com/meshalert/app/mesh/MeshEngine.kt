@@ -1,29 +1,51 @@
 package com.meshalert.app.mesh
 
 import android.content.Context
+import android.os.BatteryManager
+import android.util.Log
 import com.meshalert.app.db.MeshDatabase
 import com.meshalert.app.model.MeshMessage
 import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.Flow
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.decodeFromString
 
-class MeshEngine(private val context: Context) {
+class MeshEngine private constructor(private val context: Context) {
+
+    companion object {
+        private const val TAG = "MeshEngine"
+
+        @Volatile
+        private var INSTANCE: MeshEngine? = null
+
+        fun getInstance(context: Context): MeshEngine =
+            INSTANCE ?: synchronized(this) {
+                INSTANCE ?: MeshEngine(context.applicationContext).also { INSTANCE = it }
+            }
+    }
 
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private val dao = MeshDatabase.getInstance(context).messageDao()
-    private val seenIds = mutableSetOf<String>()    // in-memory dedup cache
+    private val seenIds = LinkedHashSet<String>() // ordered dedup cache for FIFO eviction
 
-    private val bleManager = BleManager(context) { peerAddress ->
-        // BLE found a peer — trigger WiFi Direct discovery
-        wifiDirectManager.discoverPeers()
-    }
+    private val bleManager = BleManager(
+        context = context,
+        onDeviceFound = { peerAddress ->
+            Log.d(TAG, "BLE peer detected ($peerAddress) -> triggering WiFi Direct peer discovery")
+            wifiDirectManager.discoverPeers()
+        },
+        onPacketReceived = { rawBytes, peerAddress ->
+            scope.launch { handleIncomingMicroPacket(rawBytes, peerAddress) }
+        }
+    )
 
     private val wifiDirectManager = WifiDirectManager(context) { raw ->
-        scope.launch { handleIncoming(raw) }
+        scope.launch { handleIncomingWifiDirect(raw) }
     }
 
     fun start() {
+        Log.i(TAG, "Starting MeshEngine radio services...")
         bleManager.startAdvertise()
         bleManager.startScan()
         scope.launch { wifiDirectManager.startServer() }
@@ -31,37 +53,112 @@ class MeshEngine(private val context: Context) {
     }
 
     fun stop() {
+        Log.i(TAG, "Stopping MeshEngine...")
         bleManager.stop()
         wifiDirectManager.disconnect()
         scope.cancel()
     }
 
-    suspend fun broadcast(message: MeshMessage, peerHost: String? = null) {
-        if (!shouldRelay(message)) return
-        markSeen(message.id)
-        dao.insert(message)
-        val payload = encodeMessage(message)
-        peerHost?.let { wifiDirectManager.sendMessage(it, payload) }
-    }
+    fun getAllMessages(): Flow<List<MeshMessage>> = dao.getAllMessages()
 
-    private suspend fun handleIncoming(raw: String) {
-        val message = runCatching { decodeMessage(raw) }.getOrNull() ?: return
-        if (!shouldRelay(message)) return
+    suspend fun broadcast(
+        message: MeshMessage,
+        survivorCount: Int = 1,
+        peerHost: String? = null
+    ) {
+        if (!shouldRelay(message.id, message.ttl)) return
         markSeen(message.id)
         dao.insert(message)
-        // Relay to other peers (flood with TTL decrement)
-        val relayed = message.copy(ttl = message.ttl - 1, hopCount = message.hopCount + 1)
-        if (relayed.ttl > 0) {
-            // TODO: iterate known peer hosts and forward
+
+        // 1. Convert to compact 25-byte MicroPacket for zero-pairing BLE advertisement
+        val battery = getBatteryPercentage()
+        val microPacket = MicroPacketCodec.fromMeshMessage(
+            msg = message,
+            batteryPercent = battery,
+            survivorCount = survivorCount
+        )
+        val packetBytes = MicroPacketCodec.encode(microPacket)
+
+        Log.d(TAG, "Broadcasting SOS/Alert packet via BLE (ID: ${message.id}, Batt: $battery%)")
+        bleManager.broadcastPacket(packetBytes)
+
+        // 2. Transmit via WiFi Direct if a peer socket is active
+        peerHost?.let {
+            val payload = encodeMessage(message)
+            wifiDirectManager.sendMessage(it, payload)
         }
     }
 
-    private fun shouldRelay(message: MeshMessage): Boolean =
-        message.ttl > 0 && message.id !in seenIds
+    private suspend fun handleIncomingMicroPacket(rawBytes: ByteArray, peerAddress: String) {
+        val packet = MicroPacketCodec.decode(rawBytes) ?: run {
+            Log.w(TAG, "Discarded packet from $peerAddress: CRC mismatch or corrupt payload")
+            return
+        }
+
+        val message = MicroPacketCodec.toMeshMessage(packet)
+        Log.i(TAG, "Decoded incoming MicroPacket: ${message.type} from ${message.senderName} (TTL: ${packet.ttl}, Hops: ${packet.hopCount})")
+
+        if (!shouldRelay(message.id, packet.ttl)) {
+            Log.d(TAG, "Ignoring duplicate or expired packet: ${message.id}")
+            return
+        }
+
+        markSeen(message.id)
+        dao.insert(message)
+
+        // Multi-hop flooding: Decrement TTL, increment Hop Count and re-broadcast over BLE
+        if (packet.ttl > 1) {
+            val relayedPacket = packet.copy(
+                ttl = packet.ttl - 1,
+                hopCount = packet.hopCount + 1
+            )
+            val relayedBytes = MicroPacketCodec.encode(relayedPacket)
+            Log.i(TAG, "Relaying packet over mesh: ${message.id} -> New TTL: ${relayedPacket.ttl}, Hops: ${relayedPacket.hopCount}")
+            bleManager.broadcastPacket(relayedBytes)
+        }
+    }
+
+    private suspend fun handleIncomingWifiDirect(raw: String) {
+        val message = runCatching { decodeMessage(raw) }.getOrNull() ?: return
+        if (!shouldRelay(message.id, message.ttl)) return
+        markSeen(message.id)
+        dao.insert(message)
+
+        val relayed = message.copy(ttl = message.ttl - 1, hopCount = message.hopCount + 1)
+        if (relayed.ttl > 0) {
+            val microPacket = MicroPacketCodec.fromMeshMessage(relayed, getBatteryPercentage())
+            bleManager.broadcastPacket(MicroPacketCodec.encode(microPacket))
+        }
+    }
+
+    private fun shouldRelay(id: String, ttl: Int): Boolean {
+        synchronized(seenIds) {
+            return ttl > 0 && id !in seenIds
+        }
+    }
 
     private fun markSeen(id: String) {
-        seenIds.add(id)
-        if (seenIds.size > 500) seenIds.clear() // simple overflow guard
+        synchronized(seenIds) {
+            seenIds.add(id)
+            if (seenIds.size > 1000) {
+                // Remove oldest 200 items in FIFO order
+                val iterator = seenIds.iterator()
+                var removed = 0
+                while (iterator.hasNext() && removed < 200) {
+                    iterator.next()
+                    iterator.remove()
+                    removed++
+                }
+            }
+        }
+    }
+
+    private fun getBatteryPercentage(): Int {
+        return runCatching {
+            val bm = context.getSystemService(Context.BATTERY_SERVICE) as? BatteryManager
+            val level = bm?.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY) ?: 100
+            if (level in 0..100) level else 100
+        }.getOrDefault(100)
     }
 
     private suspend fun purgeOldMessages() {

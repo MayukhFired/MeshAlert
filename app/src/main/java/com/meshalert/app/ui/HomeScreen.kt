@@ -1,28 +1,37 @@
 package com.meshalert.app.ui
 
+import android.content.Intent
+import android.location.Location
+import android.net.Uri
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.meshalert.app.location.LocationHelper
 import com.meshalert.app.model.AlertType
 import com.meshalert.app.model.MeshMessage
 import com.meshalert.app.viewmodel.MainViewModel
 import java.text.SimpleDateFormat
 import java.util.*
+import kotlin.math.roundToInt
 
 @Composable
 fun HomeScreen(modifier: Modifier = Modifier, vm: MainViewModel = viewModel()) {
     val messages by vm.messages.collectAsState()
+    val userLocation by vm.currentLocation.collectAsState()
     var showAlertDialog by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) { vm.startService() }
@@ -33,35 +42,71 @@ fun HomeScreen(modifier: Modifier = Modifier, vm: MainViewModel = viewModel()) {
             .padding(16.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Text("MeshAlert", fontSize = 24.sp, fontWeight = FontWeight.Bold)
-        Text("Offline Emergency Network", fontSize = 12.sp, color = Color.Gray)
+        Text("MeshAlert", fontSize = 26.sp, fontWeight = FontWeight.ExtraBold)
+        Text("Decentralized Offline Emergency Network", fontSize = 12.sp, color = Color.Gray)
 
-        Spacer(Modifier.height(24.dp))
+        Spacer(Modifier.height(12.dp))
 
-        // SOS Button
+        // GPS Lock Status Chip
+        GpsStatusBar(location = userLocation)
+
+        Spacer(Modifier.height(20.dp))
+
+        // Large SOS Trigger Button
         Button(
-            onClick = { vm.sendSos("Me", 0.0, 0.0) },
+            onClick = { vm.sendSos("Survivor", survivorCount = 1) },
             modifier = Modifier.size(140.dp),
             shape = CircleShape,
-            colors = ButtonDefaults.buttonColors(containerColor = Color.Red)
+            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFD32F2F)),
+            elevation = ButtonDefaults.buttonElevation(defaultElevation = 8.dp)
         ) {
-            Text("SOS", fontSize = 32.sp, fontWeight = FontWeight.Bold, color = Color.White)
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Text("SOS", fontSize = 32.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                Text("BROADCAST", fontSize = 10.sp, color = Color.White.copy(alpha = 0.8f))
+            }
         }
 
         Spacer(Modifier.height(16.dp))
 
-        OutlinedButton(onClick = { showAlertDialog = true }) {
-            Text("Send Alert")
+        OutlinedButton(
+            onClick = { showAlertDialog = true },
+            shape = RoundedCornerShape(20.dp)
+        ) {
+            Text("Send Custom Alert / Hazard")
         }
 
-        Spacer(Modifier.height(24.dp))
+        Spacer(Modifier.height(20.dp))
 
-        Text("Alert Feed (${messages.size})", fontWeight = FontWeight.SemiBold)
-        HorizontalDivider(Modifier.padding(vertical = 4.dp))
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text("Emergency Feed (${messages.size})", fontWeight = FontWeight.Bold, fontSize = 16.sp)
+            if (userLocation != null) {
+                Text("Range Active", fontSize = 11.sp, color = Color(0xFF2E7D32), fontWeight = FontWeight.SemiBold)
+            }
+        }
+        HorizontalDivider(Modifier.padding(vertical = 6.dp))
 
-        LazyColumn(modifier = Modifier.fillMaxWidth()) {
-            items(messages, key = { it.id }) { msg ->
-                MessageCard(msg)
+        if (messages.isEmpty()) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f),
+                contentAlignment = Alignment.Center
+            ) {
+                Text("No broadcasts in range yet.\nListening on BLE Mesh...", color = Color.Gray, fontSize = 14.sp)
+            }
+        } else {
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f)
+            ) {
+                items(messages, key = { it.id }) { msg ->
+                    MessageCard(msg = msg, userLocation = userLocation)
+                }
             }
         }
     }
@@ -72,28 +117,156 @@ fun HomeScreen(modifier: Modifier = Modifier, vm: MainViewModel = viewModel()) {
 }
 
 @Composable
-private fun MessageCard(msg: MeshMessage) {
+private fun GpsStatusBar(location: Location?) {
+    val (statusText, chipColor, textColor) = if (location != null) {
+        val acc = location.accuracy.roundToInt()
+        Triple(
+            "🛰️ GPS Fix: %.4f, %.4f (±%dm)".format(location.latitude, location.longitude, acc),
+            Color(0xFFE8F5E9),
+            Color(0xFF1B5E20)
+        )
+    } else {
+        Triple(
+            "🛰️ GPS: Acquiring satellite lock...",
+            Color(0xFFFFF3E0),
+            Color(0xFFE65100)
+        )
+    }
+
+    Surface(
+        color = chipColor,
+        shape = RoundedCornerShape(16.dp),
+        modifier = Modifier.padding(horizontal = 8.dp)
+    ) {
+        Text(
+            text = statusText,
+            color = textColor,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.Medium,
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+        )
+    }
+}
+
+@Composable
+private fun MessageCard(msg: MeshMessage, userLocation: Location?) {
+    val context = LocalContext.current
+    val isSos = msg.type == AlertType.SOS
     val bgColor = when (msg.type) {
         AlertType.SOS -> Color(0xFFFFEBEE)
         AlertType.SHELTER -> Color(0xFFE8F5E9)
         AlertType.ROAD_BLOCKED -> Color(0xFFFFF8E1)
         else -> Color(0xFFF5F5F5)
     }
-    val timeStr = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(msg.timestamp))
+    val timeStr = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date(msg.timestamp))
+
+    // Distance and bearing calculation
+    val hasCoordinates = msg.latitude != 0.0 || msg.longitude != 0.0
+    val distanceInfo = remember(msg.latitude, msg.longitude, userLocation) {
+        if (hasCoordinates && userLocation != null) {
+            val (distMeters, bearing) = LocationHelper.calculateDistanceAndBearing(
+                userLocation.latitude,
+                userLocation.longitude,
+                msg.latitude,
+                msg.longitude
+            )
+            val distFormatted = LocationHelper.formatDistance(distMeters)
+            val bearingFormatted = LocationHelper.formatBearing(bearing)
+            "$distFormatted · $bearingFormatted"
+        } else if (hasCoordinates) {
+            "%.4f, %.4f".format(msg.latitude, msg.longitude)
+        } else {
+            null
+        }
+    }
 
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(vertical = 4.dp),
-        colors = CardDefaults.cardColors(containerColor = bgColor)
+            .padding(vertical = 5.dp),
+        colors = CardDefaults.cardColors(containerColor = bgColor),
+        elevation = CardDefaults.cardElevation(defaultElevation = if (isSos) 3.dp else 1.dp)
     ) {
-        Column(Modifier.padding(12.dp)) {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text(msg.type.name, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+        Column(Modifier.padding(14.dp)) {
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Surface(
+                    color = if (isSos) Color(0xFFD32F2F) else Color.DarkGray,
+                    shape = RoundedCornerShape(4.dp)
+                ) {
+                    Text(
+                        msg.type.name,
+                        color = Color.White,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 11.sp,
+                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                    )
+                }
+
                 Text(timeStr, fontSize = 12.sp, color = Color.Gray)
             }
-            Text(msg.content, fontSize = 14.sp)
-            Text("from ${msg.senderName} · ${msg.hopCount} hops", fontSize = 11.sp, color = Color.Gray)
+
+            Spacer(Modifier.height(6.dp))
+
+            Text(
+                msg.content,
+                fontSize = 15.sp,
+                fontWeight = if (isSos) FontWeight.SemiBold else FontWeight.Normal
+            )
+
+            Spacer(Modifier.height(8.dp))
+
+            // Distance & Bearing Indicator Badge
+            if (distanceInfo != null) {
+                Surface(
+                    color = Color.White.copy(alpha = 0.8f),
+                    shape = RoundedCornerShape(8.dp),
+                    modifier = Modifier.clickable {
+                        // Open in Maps if user taps
+                        val uri = Uri.parse("geo:${msg.latitude},${msg.longitude}?q=${msg.latitude},${msg.longitude}(SOS+Target)")
+                        val mapIntent = Intent(Intent.ACTION_VIEW, uri)
+                        runCatching { context.startActivity(mapIntent) }
+                    }
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "📍 $distanceInfo",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = if (isSos) Color(0xFFC62828) else Color(0xFF1565C0)
+                        )
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            text = "(Tap to view map)",
+                            fontSize = 10.sp,
+                            color = Color.Gray
+                        )
+                    }
+                }
+                Spacer(Modifier.height(4.dp))
+            }
+
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(
+                    "Node: ${msg.senderName}",
+                    fontSize = 11.sp,
+                    color = Color.Gray
+                )
+                Text(
+                    "${msg.hopCount} hops · TTL ${msg.ttl}",
+                    fontSize = 11.sp,
+                    color = Color.Gray
+                )
+            }
         }
     }
 }
@@ -105,33 +278,40 @@ private fun AlertDialog(vm: MainViewModel, onDismiss: () -> Unit) {
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Send Alert") },
+        title = { Text("Send Emergency Alert") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Select Alert Category:", fontSize = 12.sp, color = Color.Gray)
                 AlertType.entries.forEach { type ->
-                    Row(verticalAlignment = Alignment.CenterVertically) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { selectedType = type }
+                    ) {
                         RadioButton(
                             selected = selectedType == type,
                             onClick = { selectedType = type }
                         )
-                        Text(type.name)
+                        Spacer(Modifier.width(4.dp))
+                        Text(type.name, fontSize = 14.sp)
                     }
                 }
                 OutlinedTextField(
                     value = content,
                     onValueChange = { content = it },
-                    label = { Text("Message") },
+                    label = { Text("Message / Situation Details") },
                     modifier = Modifier.fillMaxWidth()
                 )
             }
         },
         confirmButton = {
-            TextButton(onClick = {
+            Button(onClick = {
                 if (content.isNotBlank()) {
                     vm.sendAlert("Me", selectedType, content)
                     onDismiss()
                 }
-            }) { Text("Send") }
+            }) { Text("Broadcast") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
     )

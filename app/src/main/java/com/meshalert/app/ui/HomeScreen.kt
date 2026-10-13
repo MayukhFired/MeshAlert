@@ -35,6 +35,8 @@ fun HomeScreen(modifier: Modifier = Modifier, vm: MainViewModel = viewModel()) {
     val isAlarmActive by vm.isAlarmActive.collectAsState()
     val activeSosMessage by vm.activeSosMessage.collectAsState()
     val selectedRadarTarget by vm.selectedRadarTarget.collectAsState()
+    val isStrobeActive by vm.isStrobeActive.collectAsState()
+    val isWhistleActive by vm.isWhistleActive.collectAsState()
     var showAlertDialog by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) { vm.startService() }
@@ -161,7 +163,50 @@ fun HomeScreen(modifier: Modifier = Modifier, vm: MainViewModel = viewModel()) {
             }
         }
 
-        Spacer(Modifier.height(20.dp))
+        Spacer(Modifier.height(10.dp))
+
+
+        // Hardware Emergency Rescue Tools (Flashlight Strobe & Acoustic Whistle)
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            FilledTonalButton(
+                onClick = { vm.toggleSosStrobe() },
+                shape = RoundedCornerShape(16.dp),
+                colors = ButtonDefaults.filledTonalButtonColors(
+                    containerColor = if (isStrobeActive) Color(0xFFFFD600) else Color(0xFFF1F5F9),
+                    contentColor = if (isStrobeActive) Color.Black else Color.DarkGray
+                ),
+                modifier = Modifier.weight(1f)
+            ) {
+                Text(
+                    text = if (isStrobeActive) "🔦 STROBE ON" else "🔦 SOS Strobe",
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 12.sp
+                )
+            }
+
+            FilledTonalButton(
+                onClick = { vm.toggleWhistle() },
+                shape = RoundedCornerShape(16.dp),
+                colors = ButtonDefaults.filledTonalButtonColors(
+                    containerColor = if (isWhistleActive) Color(0xFFFF5722) else Color(0xFFF1F5F9),
+                    contentColor = if (isWhistleActive) Color.White else Color.DarkGray
+                ),
+                modifier = Modifier.weight(1f)
+            ) {
+                Text(
+                    text = if (isWhistleActive) "📢 WHISTLE ON" else "📢 Siren Whistle",
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 12.sp
+                )
+            }
+        }
+
+        Spacer(Modifier.height(18.dp))
+
 
         Row(
             modifier = Modifier.fillMaxWidth(),

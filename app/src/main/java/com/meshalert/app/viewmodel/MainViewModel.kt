@@ -6,6 +6,7 @@ import android.content.Intent
 import android.location.Location
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.meshalert.app.alert.EmergencyToolsManager
 import com.meshalert.app.location.LocationHelper
 import com.meshalert.app.mesh.MeshEngine
 import com.meshalert.app.model.AlertType
@@ -25,6 +26,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val meshEngine = MeshEngine.getInstance(app)
     val locationHelper = LocationHelper(app)
     val compassSensorManager = CompassSensorManager(app)
+    val emergencyTools = EmergencyToolsManager(app)
 
     val currentLocation: StateFlow<Location?> = locationHelper.currentLocation
     val deviceHeading: StateFlow<Float> = compassSensorManager.azimuthDegrees
@@ -34,6 +36,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     val isAlarmActive: StateFlow<Boolean> = meshEngine.alarmManager.isAlarmActive
     val activeSosMessage: StateFlow<MeshMessage?> = meshEngine.alarmManager.activeSosMessage
+
+    val isStrobeActive: StateFlow<Boolean> = emergencyTools.isStrobeActive
+    val isWhistleActive: StateFlow<Boolean> = emergencyTools.isWhistleActive
 
     private val _selectedRadarTarget = MutableStateFlow<MeshMessage?>(null)
     val selectedRadarTarget: StateFlow<MeshMessage?> = _selectedRadarTarget.asStateFlow()
@@ -45,6 +50,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun silenceAlarm() {
         meshEngine.alarmManager.silenceAlarm()
     }
+
+    fun toggleSosStrobe() {
+        emergencyTools.toggleSosStrobe()
+    }
+
+    fun toggleWhistle() {
+        emergencyTools.toggleWhistle()
+    }
+
 
     init {
         locationHelper.startListening()
@@ -124,6 +138,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         super.onCleared()
         locationHelper.stopListening()
         compassSensorManager.stopListening()
+        emergencyTools.stopAll()
     }
+
 
 }

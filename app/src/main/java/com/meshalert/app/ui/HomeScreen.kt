@@ -34,9 +34,20 @@ fun HomeScreen(modifier: Modifier = Modifier, vm: MainViewModel = viewModel()) {
     val userLocation by vm.currentLocation.collectAsState()
     val isAlarmActive by vm.isAlarmActive.collectAsState()
     val activeSosMessage by vm.activeSosMessage.collectAsState()
+    val selectedRadarTarget by vm.selectedRadarTarget.collectAsState()
     var showAlertDialog by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) { vm.startService() }
+
+    // If a radar beacon is selected, display the offline Radar HUD
+    if (selectedRadarTarget != null) {
+        RadarScreen(
+            targetMessage = selectedRadarTarget!!,
+            onBack = { vm.selectRadarTarget(null) },
+            vm = vm
+        )
+        return
+    }
 
     Column(
         modifier = modifier
@@ -60,6 +71,13 @@ fun HomeScreen(modifier: Modifier = Modifier, vm: MainViewModel = viewModel()) {
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(vertical = 4.dp)
+                    .clickable {
+                        activeSosMessage?.let { sos ->
+                            if (sos.latitude != 0.0 || sos.longitude != 0.0) {
+                                vm.selectRadarTarget(sos)
+                            }
+                        }
+                    }
             ) {
                 Row(
                     modifier = Modifier
@@ -76,7 +94,7 @@ fun HomeScreen(modifier: Modifier = Modifier, vm: MainViewModel = viewModel()) {
                             fontSize = 14.sp
                         )
                         Text(
-                            activeSosMessage?.let { "From ${it.senderName} (${it.hopCount} hops away)" }
+                            activeSosMessage?.let { "From ${it.senderName} (${it.hopCount} hops) · Tap for Radar" }
                                 ?: "Emergency beacon received",
                             color = Color.White.copy(alpha = 0.9f),
                             fontSize = 11.sp
@@ -111,11 +129,36 @@ fun HomeScreen(modifier: Modifier = Modifier, vm: MainViewModel = viewModel()) {
 
         Spacer(Modifier.height(16.dp))
 
-        OutlinedButton(
-            onClick = { showAlertDialog = true },
-            shape = RoundedCornerShape(20.dp)
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            Text("Send Custom Alert / Hazard")
+            OutlinedButton(
+                onClick = { showAlertDialog = true },
+                shape = RoundedCornerShape(20.dp),
+                modifier = Modifier.weight(1f)
+            ) {
+                Text("Send Alert", fontSize = 13.sp)
+            }
+
+            val nearestBeacon = messages.firstOrNull { it.latitude != 0.0 || it.longitude != 0.0 }
+            Button(
+                onClick = { nearestBeacon?.let { vm.selectRadarTarget(it) } },
+                enabled = nearestBeacon != null,
+                shape = RoundedCornerShape(20.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = Color(0xFF1565C0),
+                    disabledContainerColor = Color.LightGray
+                ),
+                modifier = Modifier.weight(1f)
+            ) {
+                Text(
+                    text = if (nearestBeacon != null) "🛰️ Radar HUD" else "🛰️ No Fix",
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            }
         }
 
         Spacer(Modifier.height(20.dp))
@@ -148,7 +191,11 @@ fun HomeScreen(modifier: Modifier = Modifier, vm: MainViewModel = viewModel()) {
                     .weight(1f)
             ) {
                 items(messages, key = { it.id }) { msg ->
-                    MessageCard(msg = msg, userLocation = userLocation)
+                    MessageCard(
+                        msg = msg,
+                        userLocation = userLocation,
+                        onOpenRadar = { vm.selectRadarTarget(it) }
+                    )
                 }
             }
         }
@@ -158,6 +205,7 @@ fun HomeScreen(modifier: Modifier = Modifier, vm: MainViewModel = viewModel()) {
         AlertDialog(vm) { showAlertDialog = false }
     }
 }
+
 
 @Composable
 private fun GpsStatusBar(location: Location?) {
@@ -192,8 +240,11 @@ private fun GpsStatusBar(location: Location?) {
 }
 
 @Composable
-private fun MessageCard(msg: MeshMessage, userLocation: Location?) {
-    val context = LocalContext.current
+private fun MessageCard(
+    msg: MeshMessage,
+    userLocation: Location?,
+    onOpenRadar: (MeshMessage) -> Unit
+) {
     val isSos = msg.type == AlertType.SOS
     val bgColor = when (msg.type) {
         AlertType.SOS -> Color(0xFFFFEBEE)
@@ -226,7 +277,8 @@ private fun MessageCard(msg: MeshMessage, userLocation: Location?) {
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(vertical = 5.dp),
+            .padding(vertical = 5.dp)
+            .clickable(enabled = hasCoordinates) { onOpenRadar(msg) },
         colors = CardDefaults.cardColors(containerColor = bgColor),
         elevation = CardDefaults.cardElevation(defaultElevation = if (isSos) 3.dp else 1.dp)
     ) {
@@ -265,13 +317,10 @@ private fun MessageCard(msg: MeshMessage, userLocation: Location?) {
             // Distance & Bearing Indicator Badge
             if (distanceInfo != null) {
                 Surface(
-                    color = Color.White.copy(alpha = 0.8f),
+                    color = Color.White.copy(alpha = 0.85f),
                     shape = RoundedCornerShape(8.dp),
                     modifier = Modifier.clickable {
-                        // Open in Maps if user taps
-                        val uri = Uri.parse("geo:${msg.latitude},${msg.longitude}?q=${msg.latitude},${msg.longitude}(SOS+Target)")
-                        val mapIntent = Intent(Intent.ACTION_VIEW, uri)
-                        runCatching { context.startActivity(mapIntent) }
+                        onOpenRadar(msg)
                     }
                 ) {
                     Row(
@@ -286,14 +335,16 @@ private fun MessageCard(msg: MeshMessage, userLocation: Location?) {
                         )
                         Spacer(Modifier.width(6.dp))
                         Text(
-                            text = "(Tap to view map)",
+                            text = "(Tap for Radar HUD)",
                             fontSize = 10.sp,
-                            color = Color.Gray
+                            fontWeight = FontWeight.Bold,
+                            color = Color(0xFF0277BD)
                         )
                     }
                 }
                 Spacer(Modifier.height(4.dp))
             }
+
 
             Row(
                 Modifier.fillMaxWidth(),

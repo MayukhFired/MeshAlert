@@ -10,9 +10,12 @@ import com.meshalert.app.location.LocationHelper
 import com.meshalert.app.mesh.MeshEngine
 import com.meshalert.app.model.AlertType
 import com.meshalert.app.model.MeshMessage
+import com.meshalert.app.sensor.CompassSensorManager
 import com.meshalert.app.service.MeshForegroundService
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import java.util.UUID
@@ -21,8 +24,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     private val meshEngine = MeshEngine.getInstance(app)
     val locationHelper = LocationHelper(app)
+    val compassSensorManager = CompassSensorManager(app)
 
     val currentLocation: StateFlow<Location?> = locationHelper.currentLocation
+    val deviceHeading: StateFlow<Float> = compassSensorManager.azimuthDegrees
 
     val messages = meshEngine.getAllMessages()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
@@ -30,13 +35,22 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     val isAlarmActive: StateFlow<Boolean> = meshEngine.alarmManager.isAlarmActive
     val activeSosMessage: StateFlow<MeshMessage?> = meshEngine.alarmManager.activeSosMessage
 
+    private val _selectedRadarTarget = MutableStateFlow<MeshMessage?>(null)
+    val selectedRadarTarget: StateFlow<MeshMessage?> = _selectedRadarTarget.asStateFlow()
+
+    fun selectRadarTarget(target: MeshMessage?) {
+        _selectedRadarTarget.value = target
+    }
+
     fun silenceAlarm() {
         meshEngine.alarmManager.silenceAlarm()
     }
 
     init {
         locationHelper.startListening()
+        compassSensorManager.startListening()
     }
+
 
     fun startService() {
         val ctx = getApplication<Application>()
@@ -109,5 +123,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     override fun onCleared() {
         super.onCleared()
         locationHelper.stopListening()
+        compassSensorManager.stopListening()
     }
+
 }

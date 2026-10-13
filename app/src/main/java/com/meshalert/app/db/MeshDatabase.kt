@@ -14,7 +14,7 @@ interface MessageDao {
     suspend fun getUnforwardedSosMessages(): List<MeshMessage>
 
     @Query("UPDATE messages SET isForwarded = 1 WHERE id = :id")
-    suspend fun markForwarded(id: String)
+    suspend fun markForwarded(id: String): Int
 
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun insert(message: MeshMessage): Long  // returns -1 if duplicate (ignored)
@@ -23,7 +23,7 @@ interface MessageDao {
     suspend fun exists(id: String): Boolean
 
     @Query("DELETE FROM messages WHERE timestamp < :cutoff")
-    suspend fun deleteOlderThan(cutoff: Long)
+    suspend fun deleteOlderThan(cutoff: Long): Int
 }
 
 class AlertTypeConverter {

@@ -93,6 +93,37 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
 
+    private val prefs = app.getSharedPreferences("mesh_node", Context.MODE_PRIVATE)
+
+    private val _userProfile = MutableStateFlow(loadProfileFromPrefs())
+    val userProfile: StateFlow<com.meshalert.app.model.UserProfile> = _userProfile.asStateFlow()
+
+    private fun loadProfileFromPrefs(): com.meshalert.app.model.UserProfile {
+        return com.meshalert.app.model.UserProfile(
+            name = prefs.getString("user_name", "Survivor") ?: "Survivor",
+            bloodType = prefs.getString("blood_type", "Unknown") ?: "Unknown",
+            allergies = prefs.getString("allergies", "") ?: "",
+            medicalConditions = prefs.getString("medical_conditions", "") ?: "",
+            emergencyContactName = prefs.getString("ice_contact_name", "") ?: "",
+            emergencyContactPhone = prefs.getString("emergency_contact_phone", "") ?: "",
+            defaultSurvivorCount = prefs.getInt("survivor_count", 1)
+        )
+    }
+
+    fun updateUserProfile(profile: com.meshalert.app.model.UserProfile) {
+        prefs.edit().apply {
+            putString("user_name", profile.name)
+            putString("blood_type", profile.bloodType)
+            putString("allergies", profile.allergies)
+            putString("medical_conditions", profile.medicalConditions)
+            putString("ice_contact_name", profile.emergencyContactName)
+            putString("emergency_contact_phone", profile.emergencyContactPhone)
+            putInt("survivor_count", profile.defaultSurvivorCount)
+        }.apply()
+        _userProfile.value = profile
+        smsGateway.setEmergencyContactPhone(profile.emergencyContactPhone)
+    }
+
     fun startService() {
         val ctx = getApplication<Application>()
         ctx.startForegroundService(Intent(ctx, MeshForegroundService::class.java))
@@ -107,9 +138,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         )
     }
 
-    fun sendSos(name: String = "Survivor", survivorCount: Int = 1) {
+    fun sendSos(name: String? = null, survivorCount: Int? = null) {
+        emergencyTools.startSosStrobe()
         viewModelScope.launch {
             val deviceId = getOrGenerateDeviceId()
+            val profile = _userProfile.value
+            val actualName = name ?: profile.name
+            val actualSurvivors = survivorCount ?: profile.defaultSurvivorCount
+            val medSummary = profile.toMedicalSummary()
             val loc = currentLocation.value
             val lat = loc?.latitude ?: 0.0
             val lon = loc?.longitude ?: 0.0
@@ -120,17 +156,20 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 " (No GPS fix)"
             }
 
+            val medInfo = if (medSummary.isNotBlank()) " $medSummary" else ""
+
             val msg = MeshMessage(
                 senderId = deviceId,
-                senderName = name,
+                senderName = actualName,
                 type = AlertType.SOS,
-                content = "🆘 SOS from $name (Survivors: $survivorCount)$locInfo",
+                content = "🆘 SOS from $actualName$medInfo (Survivors: $actualSurvivors)$locInfo",
                 latitude = lat,
                 longitude = lon
             )
-            meshEngine.broadcast(msg, survivorCount = survivorCount)
+            meshEngine.broadcast(msg, survivorCount = actualSurvivors)
         }
     }
+
 
     fun sendAlert(name: String, type: AlertType, content: String) {
         viewModelScope.launch {

@@ -44,15 +44,15 @@ class EmergencyToolsManager(private val context: Context) {
     }
 
     private fun findCameraWithFlash(): String? {
-        if (cameraManager == null) return null
+        val cm = cameraManager ?: return null
         return runCatching {
-            cameraManager.cameraIdList.firstOrNull { id ->
-                val characteristics = cameraManager.getCameraCharacteristics(id)
+            cm.cameraIdList.firstOrNull { id ->
+                val characteristics = cm.getCameraCharacteristics(id)
                 val hasFlash = characteristics.get(CameraCharacteristics.FLASH_INFO_AVAILABLE) == true
                 val facing = characteristics.get(CameraCharacteristics.LENS_FACING)
                 hasFlash && facing == CameraCharacteristics.LENS_FACING_BACK
-            } ?: cameraManager.cameraIdList.firstOrNull { id ->
-                cameraManager.getCameraCharacteristics(id).get(CameraCharacteristics.FLASH_INFO_AVAILABLE) == true
+            } ?: cm.cameraIdList.firstOrNull { id ->
+                cm.getCameraCharacteristics(id).get(CameraCharacteristics.FLASH_INFO_AVAILABLE) == true
             }
         }.getOrNull()
     }

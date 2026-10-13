@@ -42,8 +42,16 @@ fun HomeScreen(modifier: Modifier = Modifier, vm: MainViewModel = viewModel()) {
     val hasInternetOrCell by vm.hasInternetOrCell.collectAsState()
     var showAlertDialog by remember { mutableStateOf(false) }
     var showGatewayDialog by remember { mutableStateOf(false) }
+    var showProfileDialog by remember { mutableStateOf(false) }
+    var showSurvivalGuide by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) { vm.startService() }
+
+    // If Survival Guide is opened, display offline emergency protocol guide
+    if (showSurvivalGuide) {
+        SurvivalGuideScreen(onBack = { showSurvivalGuide = false })
+        return
+    }
 
     // If a radar beacon is selected, display the offline Radar HUD
     if (selectedRadarTarget != null) {
@@ -66,15 +74,23 @@ fun HomeScreen(modifier: Modifier = Modifier, vm: MainViewModel = viewModel()) {
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Column {
+            Column(modifier = Modifier.weight(1f)) {
                 Text("MeshAlert", fontSize = 26.sp, fontWeight = FontWeight.ExtraBold)
                 Text("Decentralized Offline Emergency Network", fontSize = 12.sp, color = Color.Gray)
             }
-            IconButton(onClick = { showGatewayDialog = true }) {
-                Text(
-                    text = if (hasInternetOrCell) "📶" else "📵",
-                    fontSize = 22.sp
-                )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                IconButton(onClick = { showSurvivalGuide = true }) {
+                    Text("📖", fontSize = 20.sp)
+                }
+                IconButton(onClick = { showProfileDialog = true }) {
+                    Text("🪪", fontSize = 20.sp)
+                }
+                IconButton(onClick = { showGatewayDialog = true }) {
+                    Text(
+                        text = if (hasInternetOrCell) "📶" else "📵",
+                        fontSize = 20.sp
+                    )
+                }
             }
         }
 
@@ -277,6 +293,10 @@ fun HomeScreen(modifier: Modifier = Modifier, vm: MainViewModel = viewModel()) {
 
     if (showGatewayDialog) {
         GatewaySettingsDialog(vm) { showGatewayDialog = false }
+    }
+
+    if (showProfileDialog) {
+        ProfileDialog(vm = vm, onDismiss = { showProfileDialog = false })
     }
 }
 

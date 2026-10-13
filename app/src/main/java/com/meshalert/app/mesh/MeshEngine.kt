@@ -3,7 +3,9 @@ package com.meshalert.app.mesh
 import android.content.Context
 import android.os.BatteryManager
 import android.util.Log
+import com.meshalert.app.alert.EmergencyAlarmManager
 import com.meshalert.app.db.MeshDatabase
+import com.meshalert.app.model.AlertType
 import com.meshalert.app.model.MeshMessage
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.Flow
@@ -25,9 +27,11 @@ class MeshEngine private constructor(private val context: Context) {
             }
     }
 
+    val alarmManager = EmergencyAlarmManager.getInstance(context)
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private val dao = MeshDatabase.getInstance(context).messageDao()
     private val seenIds = LinkedHashSet<String>() // ordered dedup cache for FIFO eviction
+
 
     private val bleManager = BleManager(
         context = context,
@@ -54,6 +58,7 @@ class MeshEngine private constructor(private val context: Context) {
 
     fun stop() {
         Log.i(TAG, "Stopping MeshEngine...")
+        alarmManager.silenceAlarm()
         bleManager.stop()
         wifiDirectManager.disconnect()
         scope.cancel()
@@ -106,6 +111,11 @@ class MeshEngine private constructor(private val context: Context) {
         markSeen(message.id)
         dao.insert(message)
 
+        // Trigger alarm immediately if incoming packet is an emergency SOS from a peer
+        if (message.type == AlertType.SOS && !isLocalDevice(packet.senderHash)) {
+            alarmManager.triggerSosAlarm(message)
+        }
+
         // Multi-hop flooding: Decrement TTL, increment Hop Count and re-broadcast over BLE
         if (packet.ttl > 1) {
             val relayedPacket = packet.copy(
@@ -124,12 +134,27 @@ class MeshEngine private constructor(private val context: Context) {
         markSeen(message.id)
         dao.insert(message)
 
+        if (message.type == AlertType.SOS) {
+            alarmManager.triggerSosAlarm(message)
+        }
+
         val relayed = message.copy(ttl = message.ttl - 1, hopCount = message.hopCount + 1)
         if (relayed.ttl > 0) {
             val microPacket = MicroPacketCodec.fromMeshMessage(relayed, getBatteryPercentage())
             bleManager.broadcastPacket(MicroPacketCodec.encode(microPacket))
         }
     }
+
+    private fun isLocalDevice(senderHash: Long): Boolean {
+        return runCatching {
+            val prefs = context.getSharedPreferences("mesh_node", Context.MODE_PRIVATE)
+            val localId = prefs.getString("node_id", null) ?: return false
+            val name = prefs.getString("user_name", "Survivor") ?: "Survivor"
+            val localHash = localId.hashCode().toLong().shl(32) or (name.hashCode().toLong() and 0xFFFFFFFFL)
+            senderHash == localHash
+        }.getOrDefault(false)
+    }
+
 
     private fun shouldRelay(id: String, ttl: Int): Boolean {
         synchronized(seenIds) {

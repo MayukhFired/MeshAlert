@@ -36,6 +36,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        handleIntent(intent)
         permissionLauncher.launch(permissions.toTypedArray())
         enableEdgeToEdge()
         setContent {
@@ -46,4 +47,16 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
+
+    override fun onNewIntent(intent: android.content.Intent) {
+        super.onNewIntent(intent)
+        handleIntent(intent)
+    }
+
+    private fun handleIntent(intent: android.content.Intent?) {
+        if (intent?.action == "ACTION_SILENCE_SOS") {
+            com.meshalert.app.alert.EmergencyAlarmManager.getInstance(this).silenceAlarm()
+        }
+    }
+
 }

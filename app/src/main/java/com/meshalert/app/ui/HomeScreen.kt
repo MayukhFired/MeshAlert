@@ -32,6 +32,8 @@ import kotlin.math.roundToInt
 fun HomeScreen(modifier: Modifier = Modifier, vm: MainViewModel = viewModel()) {
     val messages by vm.messages.collectAsState()
     val userLocation by vm.currentLocation.collectAsState()
+    val isAlarmActive by vm.isAlarmActive.collectAsState()
+    val activeSosMessage by vm.activeSosMessage.collectAsState()
     var showAlertDialog by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) { vm.startService() }
@@ -49,6 +51,47 @@ fun HomeScreen(modifier: Modifier = Modifier, vm: MainViewModel = viewModel()) {
 
         // GPS Lock Status Chip
         GpsStatusBar(location = userLocation)
+
+        if (isAlarmActive) {
+            Spacer(Modifier.height(8.dp))
+            Card(
+                colors = CardDefaults.cardColors(containerColor = Color(0xFFD32F2F)),
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 4.dp)
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(12.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            "🚨 SOS ALARM ACTIVE!",
+                            color = Color.White,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 14.sp
+                        )
+                        Text(
+                            activeSosMessage?.let { "From ${it.senderName} (${it.hopCount} hops away)" }
+                                ?: "Emergency beacon received",
+                            color = Color.White.copy(alpha = 0.9f),
+                            fontSize = 11.sp
+                        )
+                    }
+                    Button(
+                        onClick = { vm.silenceAlarm() },
+                        colors = ButtonDefaults.buttonColors(containerColor = Color.White),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                    ) {
+                        Text("SILENCE", color = Color(0xFFD32F2F), fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                    }
+                }
+            }
+        }
 
         Spacer(Modifier.height(20.dp))
 

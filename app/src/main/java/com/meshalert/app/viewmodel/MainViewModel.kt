@@ -27,6 +27,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     val messages = meshEngine.getAllMessages()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
+    val isAlarmActive: StateFlow<Boolean> = meshEngine.alarmManager.isAlarmActive
+    val activeSosMessage: StateFlow<MeshMessage?> = meshEngine.alarmManager.activeSosMessage
+
+    fun silenceAlarm() {
+        meshEngine.alarmManager.silenceAlarm()
+    }
+
     init {
         locationHelper.startListening()
     }

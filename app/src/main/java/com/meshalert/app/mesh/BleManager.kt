@@ -3,14 +3,27 @@ package com.meshalert.app.mesh
 import android.Manifest
 import android.bluetooth.*
 import android.bluetooth.le.*
+import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.ParcelUuid
 import android.util.Log
 import androidx.core.content.ContextCompat
+import kotlinx.coroutines.*
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import java.util.UUID
 
+/**
+ * Robust BLE Radio Manager for MeshAlert:
+ * - Manages BLE scanning and advertising with zero-pairing 25-byte MicroPackets.
+ * - Prioritized round-robin advertisement queue prevents packet starvation.
+ * - Emergency SOS packets preempt regular beacons and get higher air-time.
+ * - Listens to Bluetooth hardware state changes and automatically resumes radio operations.
+ */
 class BleManager(
     private val context: Context,
     private val onDeviceFound: (String) -> Unit,
@@ -22,6 +35,28 @@ class BleManager(
         // 16-bit UUID alias 0xFEED in standard Bluetooth Base UUID
         val SERVICE_UUID: UUID = UUID.fromString("0000FEED-0000-1000-8000-00805F9B34FB")
         val PARCEL_SERVICE_UUID = ParcelUuid(SERVICE_UUID)
+
+        private const val SOS_BURST_DURATION_MS = 3500L      // 3.5s per SOS cycle
+        private const val REGULAR_BURST_DURATION_MS = 2000L  // 2s per alert/hazard cycle
+        private const val HEARTBEAT_INTERVAL_MS = 4000L      // 4s presence heartbeat
+        private const val MAX_QUEUE_SIZE = 25
+    }
+
+    private data class QueuedPacket(
+        val data: ByteArray,
+        val isSos: Boolean,
+        var repeatRemaining: Int,
+        val burstDurationMs: Long
+    ) {
+        override fun equals(other: Any?): Boolean {
+            if (this === other) return true
+            if (other !is QueuedPacket) return false
+            return data.contentEquals(other.data)
+        }
+
+        override fun hashCode(): Int {
+            return data.contentHashCode()
+        }
     }
 
     private val bluetoothManager: BluetoothManager? by lazy {
@@ -33,6 +68,13 @@ class BleManager(
 
     private var isAdvertising = false
     private var isScanning = false
+    private var isRunning = false
+
+    // Queue & Concurrency Management
+    private val queueScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
+    private val queueMutex = Mutex()
+    private val packetQueue = mutableListOf<QueuedPacket>()
+    private var queueWorkerJob: Job? = null
 
     private val advertiseCallback = object : AdvertiseCallback() {
         override fun onStartSuccess(settingsInEffect: AdvertiseSettings?) {
@@ -75,6 +117,44 @@ class BleManager(
             Log.e(TAG, "BLE scan failed with errorCode: $errorCode")
             isScanning = false
         }
+    }
+
+    // Hardware State Broadcast Receiver
+    private val bluetoothStateReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent?) {
+            if (intent?.action == BluetoothAdapter.ACTION_STATE_CHANGED) {
+                val state = intent.getIntExtra(BluetoothAdapter.EXTRA_STATE, BluetoothAdapter.ERROR)
+                when (state) {
+                    BluetoothAdapter.STATE_ON -> {
+                        Log.i(TAG, "Bluetooth turned ON: Auto-restarting BLE radio services")
+                        if (isRunning) {
+                            startScan()
+                            startQueueWorker()
+                        }
+                    }
+                    BluetoothAdapter.STATE_TURNING_OFF, BluetoothAdapter.STATE_OFF -> {
+                        Log.w(TAG, "Bluetooth turned OFF: Pausing BLE radio")
+                        pauseRadio()
+                    }
+                }
+            }
+        }
+    }
+
+    init {
+        val filter = IntentFilter(BluetoothAdapter.ACTION_STATE_CHANGED)
+        ContextCompat.registerReceiver(
+            context,
+            bluetoothStateReceiver,
+            filter,
+            ContextCompat.RECEIVER_NOT_EXPORTED
+        )
+    }
+
+    fun start() {
+        isRunning = true
+        startScan()
+        startQueueWorker()
     }
 
     fun startScan() {
@@ -123,7 +203,87 @@ class BleManager(
         }
     }
 
-    fun startAdvertise(packetData: ByteArray? = null) {
+    /**
+     * Enqueues an outgoing packet into the priority round-robin broadcast queue.
+     * SOS packets preempt regular beacons and get more airtime repetitions.
+     */
+    fun broadcastPacket(packetData: ByteArray, isSos: Boolean = false) {
+        queueScope.launch {
+            queueMutex.withLock {
+                val existing = packetQueue.firstOrNull { it.data.contentEquals(packetData) }
+                if (existing != null) {
+                    // Boost repetition count if refreshed
+                    existing.repeatRemaining = if (isSos) 8 else 4
+                } else {
+                    if (packetQueue.size >= MAX_QUEUE_SIZE) {
+                        // Evict oldest non-SOS packet, or oldest packet if all are SOS
+                        val indexToRemove = packetQueue.indexOfFirst { !it.isSos }.takeIf { it != -1 } ?: 0
+                        packetQueue.removeAt(indexToRemove)
+                    }
+
+                    val item = QueuedPacket(
+                        data = packetData,
+                        isSos = isSos,
+                        repeatRemaining = if (isSos) 8 else 4,
+                        burstDurationMs = if (isSos) SOS_BURST_DURATION_MS else REGULAR_BURST_DURATION_MS
+                    )
+
+                    if (isSos) {
+                        // Insert SOS at the front for immediate transmission
+                        packetQueue.add(0, item)
+                    } else {
+                        packetQueue.add(item)
+                    }
+                }
+            }
+
+            // If queue worker is dormant or on heartbeat, prompt immediate re-evaluation
+            if (isSos) {
+                queueWorkerJob?.cancel()
+                startQueueWorker()
+            }
+        }
+    }
+
+    private fun startQueueWorker() {
+        if (queueWorkerJob?.isActive == true) return
+
+        queueWorkerJob = queueScope.launch {
+            while (isRunning && isActive) {
+                var itemToAdvertise: QueuedPacket? = null
+
+                queueMutex.withLock {
+                    if (packetQueue.isNotEmpty()) {
+                        // Find next item to transmit (SOS items get priority)
+                        val sosIndex = packetQueue.indexOfFirst { it.isSos }
+                        val targetIndex = if (sosIndex != -1) sosIndex else 0
+                        itemToAdvertise = packetQueue[targetIndex]
+
+                        // Decrement repeat counter
+                        itemToAdvertise?.let { item ->
+                            item.repeatRemaining--
+                            if (item.repeatRemaining <= 0) {
+                                packetQueue.removeAt(targetIndex)
+                            }
+                        }
+                    }
+                }
+
+                if (itemToAdvertise != null) {
+                    val item = itemToAdvertise!!
+                    Log.d(TAG, "Queue transmitting packet (SOS=${item.isSos}, left=${item.repeatRemaining})")
+                    startAdvertiseInternal(item.data)
+                    delay(item.burstDurationMs)
+                } else {
+                    // Queue is empty: Transmit presence/heartbeat beacon
+                    startAdvertiseInternal(null)
+                    delay(HEARTBEAT_INTERVAL_MS)
+                }
+            }
+        }
+    }
+
+    private fun startAdvertiseInternal(packetData: ByteArray? = null) {
         if (!hasAdvertisePermission()) {
             Log.w(TAG, "Advertise permission missing, skipping startAdvertise")
             return
@@ -167,10 +327,6 @@ class BleManager(
         }
     }
 
-    fun broadcastPacket(packetData: ByteArray) {
-        startAdvertise(packetData)
-    }
-
     fun stopAdvertise() {
         if (!hasAdvertisePermission()) return
         if (!isAdvertising) return
@@ -183,9 +339,17 @@ class BleManager(
         }
     }
 
-    fun stop() {
+    private fun pauseRadio() {
         stopScan()
         stopAdvertise()
+        queueWorkerJob?.cancel()
+    }
+
+    fun stop() {
+        isRunning = false
+        pauseRadio()
+        queueScope.cancel()
+        runCatching { context.unregisterReceiver(bluetoothStateReceiver) }
     }
 
     private fun hasScanPermission(): Boolean {

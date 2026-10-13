@@ -50,8 +50,7 @@ class MeshEngine private constructor(private val context: Context) {
 
     fun start() {
         Log.i(TAG, "Starting MeshEngine radio services...")
-        bleManager.startAdvertise()
-        bleManager.startScan()
+        bleManager.start()
         scope.launch { wifiDirectManager.startServer() }
         scope.launch { purgeOldMessages() }
     }
@@ -85,7 +84,7 @@ class MeshEngine private constructor(private val context: Context) {
         val packetBytes = MicroPacketCodec.encode(microPacket)
 
         Log.d(TAG, "Broadcasting SOS/Alert packet via BLE (ID: ${message.id}, Batt: $battery%)")
-        bleManager.broadcastPacket(packetBytes)
+        bleManager.broadcastPacket(packetBytes, isSos = (message.type == AlertType.SOS))
 
         // 2. Transmit via WiFi Direct if a peer socket is active
         peerHost?.let {
@@ -124,7 +123,7 @@ class MeshEngine private constructor(private val context: Context) {
             )
             val relayedBytes = MicroPacketCodec.encode(relayedPacket)
             Log.i(TAG, "Relaying packet over mesh: ${message.id} -> New TTL: ${relayedPacket.ttl}, Hops: ${relayedPacket.hopCount}")
-            bleManager.broadcastPacket(relayedBytes)
+            bleManager.broadcastPacket(relayedBytes, isSos = (relayedPacket.type == AlertType.SOS))
         }
     }
 
@@ -141,7 +140,7 @@ class MeshEngine private constructor(private val context: Context) {
         val relayed = message.copy(ttl = message.ttl - 1, hopCount = message.hopCount + 1)
         if (relayed.ttl > 0) {
             val microPacket = MicroPacketCodec.fromMeshMessage(relayed, getBatteryPercentage())
-            bleManager.broadcastPacket(MicroPacketCodec.encode(microPacket))
+            bleManager.broadcastPacket(MicroPacketCodec.encode(microPacket), isSos = (relayed.type == AlertType.SOS))
         }
     }
 

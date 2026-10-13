@@ -37,6 +37,8 @@ fun HomeScreen(modifier: Modifier = Modifier, vm: MainViewModel = viewModel()) {
     val selectedRadarTarget by vm.selectedRadarTarget.collectAsState()
     val isStrobeActive by vm.isStrobeActive.collectAsState()
     val isWhistleActive by vm.isWhistleActive.collectAsState()
+    val isWifiConnected by vm.isWifiDirectConnected.collectAsState()
+    val wifiPeers by vm.wifiDirectPeers.collectAsState()
     var showAlertDialog by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) { vm.startService() }
@@ -62,8 +64,13 @@ fun HomeScreen(modifier: Modifier = Modifier, vm: MainViewModel = viewModel()) {
 
         Spacer(Modifier.height(12.dp))
 
-        // GPS Lock Status Chip
-        GpsStatusBar(location = userLocation)
+        // GPS Lock & Radio Mesh Status Chip
+        GpsStatusBar(
+            location = userLocation,
+            isWifiConnected = isWifiConnected,
+            peerCount = wifiPeers.size
+        )
+
 
         if (isAlarmActive) {
             Spacer(Modifier.height(8.dp))
@@ -253,21 +260,32 @@ fun HomeScreen(modifier: Modifier = Modifier, vm: MainViewModel = viewModel()) {
 
 
 @Composable
-private fun GpsStatusBar(location: Location?) {
+private fun GpsStatusBar(
+    location: Location?,
+    isWifiConnected: Boolean = false,
+    peerCount: Int = 0
+) {
+    val p2pSuffix = when {
+        isWifiConnected -> " · 📡 P2P High-Speed Link"
+        peerCount > 0 -> " · 📡 $peerCount Direct Peers"
+        else -> " · 📡 BLE Active"
+    }
+
     val (statusText, chipColor, textColor) = if (location != null) {
         val acc = location.accuracy.roundToInt()
         Triple(
-            "🛰️ GPS Fix: %.4f, %.4f (±%dm)".format(location.latitude, location.longitude, acc),
+            "🛰️ GPS Fix: ±%dm%s".format(acc, p2pSuffix),
             Color(0xFFE8F5E9),
             Color(0xFF1B5E20)
         )
     } else {
         Triple(
-            "🛰️ GPS: Acquiring satellite lock...",
+            "🛰️ Acquiring GPS%s".format(p2pSuffix),
             Color(0xFFFFF3E0),
             Color(0xFFE65100)
         )
     }
+
 
     Surface(
         color = chipColor,

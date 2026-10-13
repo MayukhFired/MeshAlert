@@ -48,10 +48,12 @@ class MeshEngine private constructor(private val context: Context) {
         scope.launch { handleIncomingWifiDirect(raw) }
     }
 
+    val wifiDirect = wifiDirectManager
+
     fun start() {
         Log.i(TAG, "Starting MeshEngine radio services...")
         bleManager.start()
-        scope.launch { wifiDirectManager.startServer() }
+        wifiDirectManager.start()
         scope.launch { purgeOldMessages() }
     }
 
@@ -59,9 +61,10 @@ class MeshEngine private constructor(private val context: Context) {
         Log.i(TAG, "Stopping MeshEngine...")
         alarmManager.silenceAlarm()
         bleManager.stop()
-        wifiDirectManager.disconnect()
+        wifiDirectManager.stop()
         scope.cancel()
     }
+
 
     fun getAllMessages(): Flow<List<MeshMessage>> = dao.getAllMessages()
 
@@ -86,10 +89,12 @@ class MeshEngine private constructor(private val context: Context) {
         Log.d(TAG, "Broadcasting SOS/Alert packet via BLE (ID: ${message.id}, Batt: $battery%)")
         bleManager.broadcastPacket(packetBytes, isSos = (message.type == AlertType.SOS))
 
-        // 2. Transmit via WiFi Direct if a peer socket is active
-        peerHost?.let {
-            val payload = encodeMessage(message)
-            wifiDirectManager.sendMessage(it, payload)
+        // 2. High-bandwidth broadcast via Wi-Fi Direct (if peers connected)
+        val payload = encodeMessage(message)
+        if (peerHost != null) {
+            wifiDirectManager.sendMessage(peerHost, payload)
+        } else {
+            wifiDirectManager.broadcastMessage(payload)
         }
     }
 
@@ -114,6 +119,9 @@ class MeshEngine private constructor(private val context: Context) {
         if (message.type == AlertType.SOS && !isLocalDevice(packet.senderHash)) {
             alarmManager.triggerSosAlarm(message)
         }
+
+        // Trigger peer discovery to establish high-bandwidth Wi-Fi Direct link
+        wifiDirectManager.discoverPeers()
 
         // Multi-hop flooding: Decrement TTL, increment Hop Count and re-broadcast over BLE
         if (packet.ttl > 1) {
@@ -141,8 +149,12 @@ class MeshEngine private constructor(private val context: Context) {
         if (relayed.ttl > 0) {
             val microPacket = MicroPacketCodec.fromMeshMessage(relayed, getBatteryPercentage())
             bleManager.broadcastPacket(MicroPacketCodec.encode(microPacket), isSos = (relayed.type == AlertType.SOS))
+
+            val relayedPayload = encodeMessage(relayed)
+            wifiDirectManager.broadcastMessage(relayedPayload)
         }
     }
+
 
     private fun isLocalDevice(senderHash: Long): Boolean {
         return runCatching {

@@ -21,6 +21,8 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import java.util.UUID
 
+import android.net.wifi.p2p.WifiP2pDevice
+
 class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     private val meshEngine = MeshEngine.getInstance(app)
@@ -40,7 +42,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     val isStrobeActive: StateFlow<Boolean> = emergencyTools.isStrobeActive
     val isWhistleActive: StateFlow<Boolean> = emergencyTools.isWhistleActive
 
+    val isWifiDirectConnected: StateFlow<Boolean> = meshEngine.wifiDirect.isConnected
+    val wifiDirectPeers: StateFlow<List<WifiP2pDevice>> = meshEngine.wifiDirect.peerList
+
     private val _selectedRadarTarget = MutableStateFlow<MeshMessage?>(null)
+
     val selectedRadarTarget: StateFlow<MeshMessage?> = _selectedRadarTarget.asStateFlow()
 
     fun selectRadarTarget(target: MeshMessage?) {

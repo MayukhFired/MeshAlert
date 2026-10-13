@@ -45,6 +45,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     val isWifiDirectConnected: StateFlow<Boolean> = meshEngine.wifiDirect.isConnected
     val wifiDirectPeers: StateFlow<List<WifiP2pDevice>> = meshEngine.wifiDirect.peerList
 
+    val smsGateway = meshEngine.smsGateway
+    val hasInternetOrCell: StateFlow<Boolean> = smsGateway.hasConnectivity
+    val emergencyContactPhone: StateFlow<String> = smsGateway.emergencyContactPhone
+    val isAutoForwardSmsEnabled: StateFlow<Boolean> = smsGateway.isAutoForwardEnabled
+    val forwardedCount: StateFlow<Int> = smsGateway.forwardedCount
+
     private val _selectedRadarTarget = MutableStateFlow<MeshMessage?>(null)
 
     val selectedRadarTarget: StateFlow<MeshMessage?> = _selectedRadarTarget.asStateFlow()
@@ -64,6 +70,21 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun toggleWhistle() {
         emergencyTools.toggleWhistle()
     }
+
+    fun setEmergencyContactPhone(phone: String) {
+        smsGateway.setEmergencyContactPhone(phone)
+    }
+
+    fun setAutoForwardSmsEnabled(enabled: Boolean) {
+        smsGateway.setAutoForwardEnabled(enabled)
+    }
+
+    fun triggerManualSmsForward() {
+        viewModelScope.launch {
+            smsGateway.checkAndForwardPendingSos()
+        }
+    }
+
 
 
     init {

@@ -10,6 +10,12 @@ interface MessageDao {
     @Query("SELECT * FROM messages ORDER BY timestamp DESC")
     fun getAllMessages(): Flow<List<MeshMessage>>
 
+    @Query("SELECT * FROM messages WHERE type = 'SOS' AND isForwarded = 0 ORDER BY timestamp DESC")
+    suspend fun getUnforwardedSosMessages(): List<MeshMessage>
+
+    @Query("UPDATE messages SET isForwarded = 1 WHERE id = :id")
+    suspend fun markForwarded(id: String)
+
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun insert(message: MeshMessage): Long  // returns -1 if duplicate (ignored)
 
@@ -25,7 +31,7 @@ class AlertTypeConverter {
     @TypeConverter fun toAlertType(value: String): AlertType = AlertType.valueOf(value)
 }
 
-@Database(entities = [MeshMessage::class], version = 1, exportSchema = false)
+@Database(entities = [MeshMessage::class], version = 2, exportSchema = false)
 @TypeConverters(AlertTypeConverter::class)
 abstract class MeshDatabase : RoomDatabase() {
     abstract fun messageDao(): MessageDao
@@ -36,7 +42,9 @@ abstract class MeshDatabase : RoomDatabase() {
         fun getInstance(context: android.content.Context): MeshDatabase =
             INSTANCE ?: synchronized(this) {
                 Room.databaseBuilder(context, MeshDatabase::class.java, "mesh.db")
+                    .fallbackToDestructiveMigration()
                     .build().also { INSTANCE = it }
             }
     }
 }
+

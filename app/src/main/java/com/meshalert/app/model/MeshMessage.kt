@@ -19,5 +19,7 @@ data class MeshMessage(
     val longitude: Double = 0.0,
     val timestamp: Long = System.currentTimeMillis(),
     val ttl: Int = 10,           // hops remaining
-    val hopCount: Int = 0        // hops travelled
+    val hopCount: Int = 0,       // hops travelled
+    val isForwarded: Boolean = false
 )
+

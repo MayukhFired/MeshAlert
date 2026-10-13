@@ -39,7 +39,9 @@ fun HomeScreen(modifier: Modifier = Modifier, vm: MainViewModel = viewModel()) {
     val isWhistleActive by vm.isWhistleActive.collectAsState()
     val isWifiConnected by vm.isWifiDirectConnected.collectAsState()
     val wifiPeers by vm.wifiDirectPeers.collectAsState()
+    val hasInternetOrCell by vm.hasInternetOrCell.collectAsState()
     var showAlertDialog by remember { mutableStateOf(false) }
+    var showGatewayDialog by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) { vm.startService() }
 
@@ -59,8 +61,22 @@ fun HomeScreen(modifier: Modifier = Modifier, vm: MainViewModel = viewModel()) {
             .padding(16.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Text("MeshAlert", fontSize = 26.sp, fontWeight = FontWeight.ExtraBold)
-        Text("Decentralized Offline Emergency Network", fontSize = 12.sp, color = Color.Gray)
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column {
+                Text("MeshAlert", fontSize = 26.sp, fontWeight = FontWeight.ExtraBold)
+                Text("Decentralized Offline Emergency Network", fontSize = 12.sp, color = Color.Gray)
+            }
+            IconButton(onClick = { showGatewayDialog = true }) {
+                Text(
+                    text = if (hasInternetOrCell) "📶" else "📵",
+                    fontSize = 22.sp
+                )
+            }
+        }
 
         Spacer(Modifier.height(12.dp))
 
@@ -68,8 +84,10 @@ fun HomeScreen(modifier: Modifier = Modifier, vm: MainViewModel = viewModel()) {
         GpsStatusBar(
             location = userLocation,
             isWifiConnected = isWifiConnected,
-            peerCount = wifiPeers.size
+            peerCount = wifiPeers.size,
+            hasInternetOrCell = hasInternetOrCell
         )
+
 
 
         if (isAlarmActive) {
@@ -256,6 +274,10 @@ fun HomeScreen(modifier: Modifier = Modifier, vm: MainViewModel = viewModel()) {
     if (showAlertDialog) {
         AlertDialog(vm) { showAlertDialog = false }
     }
+
+    if (showGatewayDialog) {
+        GatewaySettingsDialog(vm) { showGatewayDialog = false }
+    }
 }
 
 
@@ -263,28 +285,31 @@ fun HomeScreen(modifier: Modifier = Modifier, vm: MainViewModel = viewModel()) {
 private fun GpsStatusBar(
     location: Location?,
     isWifiConnected: Boolean = false,
-    peerCount: Int = 0
+    peerCount: Int = 0,
+    hasInternetOrCell: Boolean = false
 ) {
     val p2pSuffix = when {
-        isWifiConnected -> " · 📡 P2P High-Speed Link"
-        peerCount > 0 -> " · 📡 $peerCount Direct Peers"
+        isWifiConnected -> " · 📡 P2P Linked"
+        peerCount > 0 -> " · 📡 $peerCount Peers"
         else -> " · 📡 BLE Active"
     }
+    val cellSuffix = if (hasInternetOrCell) " · 📶 Gateway Online" else " · 📵 Offline"
 
     val (statusText, chipColor, textColor) = if (location != null) {
         val acc = location.accuracy.roundToInt()
         Triple(
-            "🛰️ GPS Fix: ±%dm%s".format(acc, p2pSuffix),
+            "🛰️ GPS: ±%dm%s%s".format(acc, p2pSuffix, cellSuffix),
             Color(0xFFE8F5E9),
             Color(0xFF1B5E20)
         )
     } else {
         Triple(
-            "🛰️ Acquiring GPS%s".format(p2pSuffix),
+            "🛰️ Acquiring GPS%s%s".format(p2pSuffix, cellSuffix),
             Color(0xFFFFF3E0),
             Color(0xFFE65100)
         )
     }
+
 
 
     Surface(
@@ -409,6 +434,22 @@ private fun MessageCard(
             }
 
 
+            if (msg.isForwarded) {
+                Surface(
+                    color = Color(0xFFE8F5E9),
+                    shape = RoundedCornerShape(6.dp),
+                    modifier = Modifier.padding(bottom = 6.dp)
+                ) {
+                    Text(
+                        "✓ Forwarded via SMS Gateway",
+                        color = Color(0xFF1B5E20),
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                    )
+                }
+            }
+
             Row(
                 Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween
@@ -426,6 +467,90 @@ private fun MessageCard(
             }
         }
     }
+}
+
+@Composable
+private fun GatewaySettingsDialog(vm: MainViewModel, onDismiss: () -> Unit) {
+    val hasInternetOrCell by vm.hasInternetOrCell.collectAsState()
+    val emergencyPhone by vm.emergencyContactPhone.collectAsState()
+    val isAutoForwardEnabled by vm.isAutoForwardSmsEnabled.collectAsState()
+    val forwardedCount by vm.forwardedCount.collectAsState()
+
+    var phoneInput by remember(emergencyPhone) { mutableStateOf(emergencyPhone) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Cellular SMS Gateway (DTN)") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Surface(
+                    color = if (hasInternetOrCell) Color(0xFFE8F5E9) else Color(0xFFFFF3E0),
+                    shape = RoundedCornerShape(8.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier.padding(10.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = if (hasInternetOrCell) "📶 Cell / Internet Online" else "📵 Offline (DTN Queue Active)",
+                            color = if (hasInternetOrCell) Color(0xFF1B5E20) else Color(0xFFE65100),
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+
+                Text(
+                    "When any phone in the mesh catches cell signal, it will auto-forward accumulated offline SOS beacons to your emergency contacts via SMS.",
+                    fontSize = 12.sp,
+                    color = Color.Gray
+                )
+
+                OutlinedTextField(
+                    value = phoneInput,
+                    onValueChange = { phoneInput = it },
+                    label = { Text("Emergency Contact Phone #") },
+                    placeholder = { Text("+1234567890 or 911") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("Auto-forward on signal", fontSize = 13.sp)
+                    Switch(
+                        checked = isAutoForwardEnabled,
+                        onCheckedChange = { vm.setAutoForwardSmsEnabled(it) }
+                    )
+                }
+
+                if (forwardedCount > 0) {
+                    Text(
+                        "Total beacons forwarded: $forwardedCount",
+                        fontSize = 12.sp,
+                        color = Color(0xFF2E7D32),
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            Button(onClick = {
+                vm.setEmergencyContactPhone(phoneInput)
+                if (hasInternetOrCell) {
+                    vm.triggerManualSmsForward()
+                }
+                onDismiss()
+            }) { Text("Save & Sync") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Close") }
+        }
+    )
 }
 
 @Composable
@@ -473,3 +598,4 @@ private fun AlertDialog(vm: MainViewModel, onDismiss: () -> Unit) {
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
     )
 }
+

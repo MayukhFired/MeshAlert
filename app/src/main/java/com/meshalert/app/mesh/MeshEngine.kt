@@ -49,11 +49,13 @@ class MeshEngine private constructor(private val context: Context) {
     }
 
     val wifiDirect = wifiDirectManager
+    val smsGateway = com.meshalert.app.gateway.SmsGatewayManager(context)
 
     fun start() {
         Log.i(TAG, "Starting MeshEngine radio services...")
         bleManager.start()
         wifiDirectManager.start()
+        smsGateway.start()
         scope.launch { purgeOldMessages() }
     }
 
@@ -62,8 +64,10 @@ class MeshEngine private constructor(private val context: Context) {
         alarmManager.silenceAlarm()
         bleManager.stop()
         wifiDirectManager.stop()
+        smsGateway.stop()
         scope.cancel()
     }
+
 
 
     fun getAllMessages(): Flow<List<MeshMessage>> = dao.getAllMessages()
@@ -116,8 +120,12 @@ class MeshEngine private constructor(private val context: Context) {
         dao.insert(message)
 
         // Trigger alarm immediately if incoming packet is an emergency SOS from a peer
-        if (message.type == AlertType.SOS && !isLocalDevice(packet.senderHash)) {
-            alarmManager.triggerSosAlarm(message)
+        if (message.type == AlertType.SOS) {
+            if (!isLocalDevice(packet.senderHash)) {
+                alarmManager.triggerSosAlarm(message)
+            }
+            // Check if gateway can forward out to SMS immediately
+            scope.launch { smsGateway.checkAndForwardPendingSos() }
         }
 
         // Trigger peer discovery to establish high-bandwidth Wi-Fi Direct link
@@ -143,7 +151,9 @@ class MeshEngine private constructor(private val context: Context) {
 
         if (message.type == AlertType.SOS) {
             alarmManager.triggerSosAlarm(message)
+            scope.launch { smsGateway.checkAndForwardPendingSos() }
         }
+
 
         val relayed = message.copy(ttl = message.ttl - 1, hopCount = message.hopCount + 1)
         if (relayed.ttl > 0) {
